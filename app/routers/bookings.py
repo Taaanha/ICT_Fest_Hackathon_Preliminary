@@ -14,7 +14,7 @@ from ..models import Booking, Room, User
 from ..schemas import BookingCreateRequest
 from ..serializers import serialize_booking
 from ..services import notifications, ratelimit, reference, stats
-from ..services.refunds import log_refund
+from ..services.refunds import log_refund, calculate_refund_cents
 from ..timeutils import iso_utc, parse_input_datetime
 
 router = APIRouter(tags=["bookings"])
@@ -121,9 +121,6 @@ def create_booking(
         db.commit()
         db.refresh(booking)
 
-    stats.record_create(room.id, price_cents)
-    cache.invalidate_availability(room.id, start.date().isoformat())
-    notifications.notify_created(booking)
     
     stats.record_create(room.id, price_cents)
     cache.invalidate_availability(room.id, start.date().isoformat())
@@ -217,13 +214,12 @@ def cancel_booking(
         else:
             refund_percent = 0
 
-        refund_amount_cents = round(booking.price_cents * (refund_percent / 100.0))
+        refund_amount_cents = calculate_refund_cents(booking.price_cents, refund_percent)
 
         log_refund(db, booking, refund_percent)
 
         booking.status = "cancelled"
         db.commit()
-
     stats.record_cancel(booking.room_id, booking.price_cents)
     cache.invalidate_report(user.org_id)
     cache.invalidate_availability(booking.room_id, booking.start_time.date().isoformat())
