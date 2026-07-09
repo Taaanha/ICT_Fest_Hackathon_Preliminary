@@ -1,5 +1,6 @@
 """Booking creation, listing, detail and cancellation."""
 import time
+import threading
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
@@ -70,7 +71,7 @@ def _check_quota(db: Session, user_id: int, now: datetime, start: datetime) -> N
     if count >= QUOTA_LIMIT:
         raise AppError(409, "QUOTA_EXCEEDED", "Booking quota exceeded")
 
-
+_booking_lock = threading.Lock()
 @router.post("/bookings", status_code=201)
 def create_booking(
     payload: BookingCreateRequest,
@@ -99,25 +100,26 @@ def create_booking(
     if room is None:
         raise AppError(404, "ROOM_NOT_FOUND", "Room not found")
 
-    if _has_conflict(db, room.id, start, end):
-        raise AppError(409, "ROOM_CONFLICT", "Room already booked for this interval")
+    with _booking_lock:
+        if _has_conflict(db, room.id, start, end):
+            raise AppError(409, "ROOM_CONFLICT", "Room already booked for this interval")
 
-    _check_quota(db, user.id, now, start)
+        _check_quota(db, user.id, now, start)
 
-    price_cents = room.hourly_rate_cents * duration_hours
-    booking = Booking(
-        room_id=room.id,
-        user_id=user.id,
-        start_time=start,
-        end_time=end,
-        status="confirmed",
-        reference_code=reference.next_reference_code(),
-        price_cents=price_cents,
-        created_at=now,
-    )
-    db.add(booking)
-    db.commit()
-    db.refresh(booking)
+        price_cents = room.hourly_rate_cents * duration_hours
+        booking = Booking(
+            room_id=room.id,
+            user_id=user.id,
+            start_time=start,
+            end_time=end,
+            status="confirmed",
+            reference_code=reference.next_reference_code(),
+            price_cents=price_cents,
+            created_at=now,
+        )
+        db.add(booking)
+        db.commit()
+        db.refresh(booking)
 
     stats.record_create(room.id, price_cents)
     cache.invalidate_availability(room.id, start.date().isoformat())
@@ -196,25 +198,26 @@ def cancel_booking(
     if user.role != "admin" and booking.user_id != user.id:
         raise AppError(404, "BOOKING_NOT_FOUND", "Booking not found")
 
-    if booking.status == "cancelled":
-        raise AppError(409, "ALREADY_CANCELLED", "Booking already cancelled")
+    with _booking_lock:
+        db.refresh(booking)
+        if booking.status == "cancelled":
+            raise AppError(409, "ALREADY_CANCELLED", "Booking already cancelled")
 
-    now = datetime.utcnow()
-    notice = booking.start_time - now
-    if notice >= timedelta(hours=48):
-        refund_percent = 100
-    elif notice >= timedelta(hours=24):
-        refund_percent = 50
-    else:
-        refund_percent = 0
+        now = datetime.utcnow()
+        notice = booking.start_time - now
+        if notice >= timedelta(hours=48):
+            refund_percent = 100
+        elif notice >= timedelta(hours=24):
+            refund_percent = 50
+        else:
+            refund_percent = 0
 
-    refund_amount_cents = round(booking.price_cents * (refund_percent / 100.0))
+        refund_amount_cents = round(booking.price_cents * (refund_percent / 100.0))
 
-    log_refund(db, booking, refund_percent)
+        log_refund(db, booking, refund_percent)
 
-    _settlement_pause()
-    booking.status = "cancelled"
-    db.commit()
+        booking.status = "cancelled"
+        db.commit()
 
     stats.record_cancel(booking.room_id, booking.price_cents)
     cache.invalidate_report(user.org_id)
