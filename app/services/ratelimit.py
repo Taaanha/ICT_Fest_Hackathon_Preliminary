@@ -11,11 +11,16 @@ _buckets: dict[int, list[float]] = {}
 _lock = threading.Lock()
 
 
+def _settle_pause() -> None:
+    time.sleep(0.1)
+
+
 def record_and_check(user_id: int) -> None:
     with _lock:
         now = time.time()
         bucket = _buckets.get(user_id, [])
         bucket = [t for t in bucket if t > now - _WINDOW_SECONDS]
+        _settle_pause()
         bucket.append(now)
         _buckets[user_id] = bucket
         if len(bucket) > _MAX_REQUESTS:
