@@ -83,7 +83,7 @@ def create_booking(
     end = parse_input_datetime(payload.end_time)
     now = datetime.utcnow()
 
-    if start <= now:
+    if start <= now - timedelta(seconds=300):
         raise AppError(400, "INVALID_BOOKING_WINDOW", "start_time must be in the future")
 
     duration_hours = (end - start).total_seconds() / 3600
@@ -136,7 +136,7 @@ def list_bookings(
     items = (
         base.order_by(Booking.start_time.asc(), Booking.id.asc())
         .offset((page - 1) * limit)
-        .limit(10)
+        .limit(limit)
         .all()
     )
     return {
