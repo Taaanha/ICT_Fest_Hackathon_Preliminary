@@ -61,3 +61,8 @@
     - File: `app/routers/bookings.py`
     - Issue: Booking creation did not explicitly reject `end_time <= start_time`.
     - Fix: Added validation to require `end_time` to be strictly after `start_time`.
+
+13. Refund policy for cancellations under 24 hours
+    - File: `app/routers/bookings.py`
+    - Issue: Cancellations with less than 24 hours' notice incorrectly returned a 50% refund.
+    - Fix: Changed the final refund branch to return `0%` for notice under 24 hours.
