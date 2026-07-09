@@ -3,9 +3,9 @@ import hashlib
 import hmac
 import os
 import uuid
+import jwt
 from datetime import datetime, timedelta, timezone
 
-import jwt
 from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,7 @@ from .models import User
 # Access tokens presented to /auth/logout are recorded here so they can no
 # longer be used.
 _revoked_tokens: set[str] = set()
+_used_refresh_jtis: set[str] = set()
 
 _PBKDF2_ROUNDS = 100_000
 
@@ -47,7 +48,7 @@ def _now_ts() -> int:
 
 def create_access_token(user: User) -> str:
     iat = _now_ts()
-    lifetime = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES * 60)
+    lifetime = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     payload = {
         "sub": str(user.id),
         "org": user.org_id,
@@ -84,7 +85,12 @@ def decode_token(token: str) -> dict:
 
 def revoke_access_token(payload: dict) -> None:
     _revoked_tokens.add(payload["jti"])
-
+def check_and_consume_refresh(jti: str) -> bool:
+    """Returns True if this is the first use, False if already used."""
+    if jti in _used_refresh_jtis:
+        return False
+    _used_refresh_jtis.add(jti)
+    return True
 
 def get_token_payload(request: Request) -> dict:
     header = request.headers.get("Authorization")
@@ -94,7 +100,7 @@ def get_token_payload(request: Request) -> dict:
     payload = decode_token(token)
     if payload.get("type") != "access":
         raise AppError(401, "UNAUTHORIZED", "Wrong token type")
-    if payload.get("sub") in _revoked_tokens:
+    if payload.get("jti") in _revoked_tokens:
         raise AppError(401, "UNAUTHORIZED", "Token has been revoked")
     return payload
 
